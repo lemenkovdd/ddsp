@@ -1,6 +1,7 @@
 package node
 
 import (
+	"sync"
 	"time"
 
 	router "router/client"
@@ -28,15 +29,21 @@ type Config struct {
 
 // Node is a Node service.
 type Node struct {
-	// TODO: implement
+	conf      Config
+	heartbeat chan struct{}
+	storage   map[storage.RecordID][]byte
+	lock      sync.RWMutex
 }
 
 // New creates a new Node with a given cfg.
 //
 // New создает новый Node с данным cfg.
 func New(cfg Config) *Node {
-	// TODO: implement
-	return nil
+	return &Node{
+		conf:      cfg,
+		heartbeat: make(chan struct{}),
+		storage:   make(map[storage.RecordID][]byte),
+	}
 }
 
 // Heartbeats runs heartbeats from node to a router
@@ -45,14 +52,24 @@ func New(cfg Config) *Node {
 // Heartbeats запускает отправку heartbeats от node к router
 // через каждый интервал времени, заданный в cfg.Heartbeat.
 func (node *Node) Heartbeats() {
-	// TODO: implement
+	go func() {
+		for {
+			select {
+			case <-node.heartbeat:
+				return
+			default:
+				node.conf.Client.Heartbeat(node.conf.Router, node.conf.Addr)
+				time.Sleep(node.conf.Heartbeat)
+			}
+		}
+	}()
 }
 
 // Stop stops heartbeats
 //
 // Stop останавливает отправку heartbeats.
 func (node *Node) Stop() {
-	// TODO: implement
+	node.heartbeat <- struct{}{}
 }
 
 // Put an item to the node if an item for the given key doesn't exist.
@@ -61,7 +78,14 @@ func (node *Node) Stop() {
 // Put -- добавить запись в node, если запись для данного ключа
 // не существует. Иначе вернуть ошибку storage.ErrRecordExists.
 func (node *Node) Put(k storage.RecordID, d []byte) error {
-	// TODO: implement
+	node.lock.Lock()
+	defer node.lock.Unlock()
+
+	if _, ok := node.storage[k]; ok {
+		return storage.ErrRecordExists
+	}
+	node.storage[k] = d
+
 	return nil
 }
 
@@ -71,7 +95,14 @@ func (node *Node) Put(k storage.RecordID, d []byte) error {
 // Del -- удалить запись из node, если запись для данного ключа
 // существует. Иначе вернуть ошибку storage.ErrRecordNotFound.
 func (node *Node) Del(k storage.RecordID) error {
-	// TODO: implement
+	node.lock.Lock()
+	defer node.lock.Unlock()
+
+	if _, ok := node.storage[k]; !ok {
+		return storage.ErrRecordNotFound
+	}
+	delete(node.storage, k)
+
 	return nil
 }
 
@@ -81,6 +112,12 @@ func (node *Node) Del(k storage.RecordID) error {
 // Get -- получить запись из node, если запись для данного ключа
 // существует. Иначе вернуть ошибку storage.ErrRecordNotFound.
 func (node *Node) Get(k storage.RecordID) ([]byte, error) {
-	// TODO: implement
-	return nil, nil
+	node.lock.RLock()
+	defer node.lock.RUnlock()
+
+	if item, ok := node.storage[k]; ok {
+		return item, nil
+	}
+
+	return nil, storage.ErrRecordNotFound
 }
