@@ -1,6 +1,7 @@
 package router
 
 import (
+	"sync"
 	"time"
 
 	"storage"
@@ -31,7 +32,9 @@ type Config struct {
 
 // Router is a router service.
 type Router struct {
-	// TODO: implement
+	conf      Config
+	heartbeat map[storage.ServiceAddr]time.Time
+	lock      sync.RWMutex
 }
 
 // New creates a new Router with a given cfg.
@@ -42,8 +45,21 @@ type Router struct {
 // Возвращает ошибку storage.ErrNotEnoughDaemons если в cfg.Nodes
 // меньше чем storage.ReplicationFactor nodes.
 func New(cfg Config) (*Router, error) {
-	// TODO: implement
-	return nil, nil
+	if len(cfg.Nodes) < storage.ReplicationFactor {
+		return nil, storage.ErrNotEnoughDaemons
+	}
+
+	ret := Router{
+		conf:      cfg,
+		heartbeat: make(map[storage.ServiceAddr]time.Time),
+	}
+
+	now := time.Now()
+	for _, node := range cfg.Nodes {
+		ret.heartbeat[node] = now
+	}
+
+	return &ret, nil
 }
 
 // Hearbeat registers node in the router.
@@ -53,7 +69,14 @@ func New(cfg Config) (*Router, error) {
 // Возвращает ошибку storage.ErrUnknownDaemon если node не
 // обслуживается Router.
 func (r *Router) Heartbeat(node storage.ServiceAddr) error {
-	// TODO: implement
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	if _, ok := r.heartbeat[node]; !ok {
+		return storage.ErrUnknownDaemon
+	}
+
+	r.heartbeat[node] = time.Now()
 	return nil
 }
 
@@ -65,14 +88,28 @@ func (r *Router) Heartbeat(node storage.ServiceAddr) error {
 // запись с ключом k. Возвращает ошибку storage.ErrNotEnoughDaemons
 // если меньше, чем storage.MinRedundancy найдено.
 func (r *Router) NodesFind(k storage.RecordID) ([]storage.ServiceAddr, error) {
-	// TODO: implement
-	return nil, nil
+	nodes := r.conf.NodesFinder.NodesFind(k, r.conf.Nodes)
+	foundNodes := make([]storage.ServiceAddr, 0, len(nodes))
+	now := time.Now()
+
+	for _, node := range nodes {
+		r.lock.RLock()
+		if now.Sub(r.heartbeat[node]) <= r.conf.ForgetTimeout {
+			foundNodes = append(foundNodes, node)
+		}
+		r.lock.RUnlock()
+	}
+
+	if len(foundNodes) < storage.MinRedundancy {
+		return nil, storage.ErrNotEnoughDaemons
+	}
+
+	return foundNodes, nil
 }
 
 // List returns a list of all nodes served by Router.
 //
 // List возвращает cписок всех node, обслуживаемых Router.
 func (r *Router) List() []storage.ServiceAddr {
-	// TODO: implement
-	return nil
+	return r.conf.Nodes
 }
